@@ -52,8 +52,11 @@ class Calibration(object):
         self.V2C = np.reshape(self.V2C, [3, 4])
         self.C2V = inverse_rigid_trans(self.V2C)
         # Rotation from reference camera coord to rect camera coord
-        self.R0 = calibs['R0_rect']
-        self.R0 = np.reshape(self.R0, [3, 3])
+        # For the odometry benchmark, the images are already rectified. Thus,
+        # the rotation should be an identity.
+        self.R0 = np.eye(3) #calibs['R0_rect']
+        #self.R0 = calibs['R0_rect']
+        #self.R0 = np.reshape(self.R0, [3, 3])
 
         # Camera intrinsics and extrinsics
         self.c_u = self.P[0, 2]

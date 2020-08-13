@@ -4,8 +4,23 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import kitti_util
 import numpy as np
-import scipy.misc as ssc
+import imageio
 
+def filter_camera_fov_points(pc_velo, height, width, calib):
+    """
+    Returns indices of velodyne points which are in the field of view of the
+    camera by projecting them onto the image plane and checking whether they
+    are within bounds.
+    Note: pc_velo[:, 0] concerns the pointing the 'front' of the velodyne
+    coordinate system. The axes of the velodyne coordinates (x,y,z) have
+    different meaning from the axes in the camera coordinate system
+    (where z is 'front').
+    """
+    pts_2d = calib.project_velo_to_image(pc_velo)
+    fov_inds = (pts_2d[:, 0] < width - 1) & (pts_2d[:, 0] >= 0) & \
+               (pts_2d[:, 1] < height - 1) & (pts_2d[:, 1] >= 0)
+    fov_inds = fov_inds & (pc_velo[:, 0] > 2)
+    return fov_inds
 
 def generate_dispariy_from_velo(pc_velo, height, width, calib):
     pts_2d = calib.project_velo_to_image(pc_velo)
@@ -27,6 +42,7 @@ if __name__ == '__main__':
     parser = argparse.ArgumentParser(description='Generate Disparity')
     parser.add_argument('--data_path', type=str, default='~/Kitti/object/training/')
     parser.add_argument('--split_file', type=str, default='~/Kitti/object/train.txt')
+    parser.add_argument('-f','--filter-camera-fov-points', action='store_true')
     args = parser.parse_args()
 
     assert os.path.isdir(args.data_path)
@@ -34,6 +50,9 @@ if __name__ == '__main__':
     calib_dir = args.data_path + '/calib/'
     image_dir = args.data_path + '/image_2/'
     depth_dir = args.data_path + '/depth_map/'
+    label_dir = args.data_path + '/labels/'
+    lidar_in_fov_dir = args.data_path + '/velodyne_in_fov/'
+    labels_in_fov_dir = args.data_path + '/labels_in_fov/'
 
     assert os.path.isdir(lidar_dir)
     assert os.path.isdir(calib_dir)
@@ -41,6 +60,10 @@ if __name__ == '__main__':
 
     if not os.path.isdir(depth_dir):
         os.makedirs(depth_dir)
+    if not os.path.isdir(lidar_in_fov_dir):
+        os.makedirs(lidar_in_fov_dir)
+    if not os.path.isdir(labels_in_fov_dir):
+        os.makedirs(labels_in_fov_dir)
 
     lidar_files = [x for x in os.listdir(lidar_dir) if x[-3:] == 'bin']
     lidar_files = sorted(lidar_files)
@@ -56,10 +79,31 @@ if __name__ == '__main__':
         calib_file = '{}/{}.txt'.format(calib_dir, predix)
         calib = kitti_util.Calibration(calib_file)
         # load point cloud
-        lidar = np.fromfile(lidar_dir + '/' + fn, dtype=np.float32).reshape((-1, 4))[:, :3]
+        lidar_full = np.fromfile(lidar_dir + '/' + fn, dtype=np.float32).reshape((-1, 4))
+        lidar = lidar_full[:, :3]
         image_file = '{}/{}.png'.format(image_dir, predix)
-        image = ssc.imread(image_file)
+        image = imageio.imread(image_file)
         height, width = image.shape[:2]
-        depth_map = generate_dispariy_from_velo(lidar, height, width, calib)
-        np.save(depth_dir + '/' + predix, depth_map)
-        print('Finish Depth Map {}'.format(predix))
+        if not args.filter_camera_fov_points:
+            depth_map = generate_dispariy_from_velo(lidar, height, width, calib)
+            np.save(depth_dir + '/' + predix, depth_map)
+            print('Finish Depth Map {}'.format(predix))
+        else:
+            fov_inds = filter_camera_fov_points(lidar, height, width, calib)
+            lidar_in_fov = lidar_full[fov_inds,:]
+            lidar_out_filename = lidar_in_fov_dir + '/' + predix + '.bin'
+            lidar_in_fov.tofile(lidar_out_filename, sep='')
+            print('Removed {:4.1f}% of the points and saved to {}.'
+                  .format((1.0-float(lidar_in_fov.shape[0])/lidar.shape[0])*100,
+                          lidar_out_filename))
+
+            label_filename = label_dir + '/' + predix + '.label'
+            if os.path.isfile(label_filename):
+                labels_full = np.fromfile(label_filename, dtype=np.uint32).reshape((-1))
+                labels_in_fov = labels_full[fov_inds]
+                labels_out_filename = labels_in_fov_dir + '/' + predix + '.label'
+                labels_in_fov.tofile(labels_out_filename, sep='')
+                print('Labels: Removed {:4.1f}% of the  and saved to {}.'
+                      .format((1.0-float(labels_in_fov.shape[0])/labels_full.shape[0])*100,
+                              labels_out_filename))
+
